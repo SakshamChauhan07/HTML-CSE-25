@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Gesture Sensor</title>
+    
+    <!-- CSS Styles -->
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a;
+            color: white;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden; /* Prevent scrolling */
+            transition: background-color 0.3s ease;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* The webcam video (hidden, we only need the data) */
+        .input_video {
+            display: none;
+        }
+
+        /* The canvas showing the hand skeleton */
+        .output_canvas {
+            position: absolute;
+            width: 640px;
+            height: 480px;
+            border: 2px solid #333;
+            border-radius: 10px;
+            transform: scaleX(-1); /* Mirror effect for natural feel */
+            z-index: 1;
+            opacity: 0.6;
+        }
+
+        /* The virtual cursor controlled by your hand */
+        #cursor {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background-color: #00ffcc;
+            border-radius: 50%;
+            border: 3px solid white;
+            transform: translate(-50%, -50%); /* Center on coordinates */
+            pointer-events: none; /* Let clicks pass through */
+            z-index: 10;
+            box-shadow: 0 0 20px #00ffcc;
+            transition: width 0.1s, height 0.1s;
+        }
+
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 20;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .status-active {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+    </style>
+    
+    <!-- Load MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="info">
+        <h2>Gesture Sensor</h2>
+        <p>1. Move hand to move Cursor.</p>
+        <p>2. <b>Pinch</b> (Thumb + Index) to click/change color.</p>
+        <p>Status: <span id="status-text">Loading...</span></p>
+    </div>
+
+    <div id="container">
+        <!-- Input Video -->
+        <video class="input_video"></video>
+        <!-- Output Canvas for Skeleton -->
+        <canvas class="output_canvas" width="640" height="480"></canvas>
+        <!-- Custom Cursor -->
+        <div id="cursor"></div>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script type="module">
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementsByClassName('output_canvas')[0];
+        const canvasCtx = canvasElement.getContext('2d');
+        const cursor = document.getElementById('cursor');
+        const statusText = document.getElementById('status-text');
+        const body = document.body;
+
+        let isPinched = false;
+
+        function onResults(results) {
+            // Save the canvas context
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            // Draw the video frame
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                statusText.innerText = "Hand Detected";
+                statusText.className = "status-active";
+
+                // Get the first detected hand
+                const landmarks = results.multiHandLandmarks[0];
+
+                // --- 1. Draw the Skeleton ---
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+
+                // --- 2. Cursor Logic (Index Finger Tip - ID 8) ---
+                // MediaPipe gives coordinates from 0.0 to 1.0
+                // We need to mirror the x-axis (1 - x) because of the selfie view
+                const x = (1 - landmarks[8].x) * window.innerWidth;
+                const y = landmarks[8].y * window.innerHeight;
+
+                cursor.style.left = `${x}px`;
+                cursor.style.top = `${y}px`;
+
+                // --- 3. Click Logic (Pinch Detection) ---
+                // Calculate distance between Index Tip (8) and Thumb Tip (4)
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+                
+                const distance = Math.hypot(
+                    indexTip.x - thumbTip.x,
+                    indexTip.y - thumbTip.y
+                );
+
+                // Threshold for "touching" (0.05 is roughly 5% of screen width)
+                if (distance < 0.05) {
+                    if (!isPinched) {
+                        // Action Triggered
+                        cursor.style.backgroundColor = "red";
+                        cursor.style.width = "20px";
+                        cursor.style.height = "20px";
+                        
+                        // Change website background color randomly
+                        const randomColor = Math.floor(Math.random()*16777215).toString(16);
+                        body.style.backgroundColor = "#" + randomColor;
+                        
+                        isPinched = true;
+                    }
+                } else {
+                    // Reset when fingers move apart
+                    cursor.style.backgroundColor = "#00ffcc";
+                    cursor.style.width = "30px";
+                    cursor.style.height = "30px";
+                    isPinched = false;
+                }
+
+            } else {
+                statusText.innerText = "Searching for hands...";
+                statusText.className = "";
+            }
+            canvasCtx.restore();
+        }
+
+        // Setup MediaPipe Hands
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        // Setup Camera
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+
+        camera.start();
+    </script>
+</body>
+</html>
