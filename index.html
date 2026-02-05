@@ -2,10 +2,260 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>First Page</title>
+    <title>JARVIS Hand Interface</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Courier New', Courier, monospace;
+            color: #00f3ff;
+        }
+
+        /* --- THE ERROR BOX (Only shows if camera fails) --- */
+        #error-overlay {
+            display: none; /* Hidden by default */
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 9999;
+            text-align: center;
+            padding-top: 100px;
+        }
+        .error-content {
+            border: 2px solid red;
+            display: inline-block;
+            padding: 40px;
+            color: red;
+            background: #220000;
+        }
+
+        /* --- BACKGROUND GRID --- */
+        #grid {
+            position: absolute;
+            width: 200vw; height: 200vh;
+            background-image: 
+                linear-gradient(rgba(0, 243, 255, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 243, 255, 0.1) 1px, transparent 1px);
+            background-size: 50px 50px;
+            transform: perspective(500px) rotateX(60deg) translateY(-100px) translateZ(-200px);
+            animation: gridMove 20s linear infinite;
+        }
+
+        @keyframes gridMove {
+            0% { transform: perspective(500px) rotateX(60deg) translateY(0) translateZ(-200px); }
+            100% { transform: perspective(500px) rotateX(60deg) translateY(50px) translateZ(-200px); }
+        }
+
+        /* --- WEBCAM (Top Right) --- */
+        .cam-frame {
+            position: fixed;
+            top: 20px; right: 20px;
+            width: 300px; height: 225px;
+            border: 2px solid #00f3ff;
+            background: rgba(0, 20, 30, 0.8);
+            border-radius: 10px;
+            overflow: hidden;
+            z-index: 100;
+        }
+        .cam-label {
+            position: absolute; top: 0; left: 0;
+            background: #00f3ff; color: #000;
+            font-weight: bold; padding: 2px 5px; font-size: 12px;
+        }
+        .input_video { display: none; }
+        .output_canvas {
+            width: 100%; height: 100%;
+            transform: scaleX(-1);
+            opacity: 0.7;
+        }
+
+        /* --- CENTRAL HUD --- */
+        #center-ring {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px; height: 400px;
+            border: 1px dashed rgba(0, 243, 255, 0.3);
+            border-radius: 50%;
+            animation: spin 10s linear infinite;
+            pointer-events: none;
+        }
+        #center-ring::after {
+            content: ''; position: absolute;
+            top: -10px; left: -10px; right: -10px; bottom: -10px;
+            border: 2px solid rgba(0, 243, 255, 0.1);
+            border-radius: 50%;
+            border-top: 2px solid #00f3ff;
+            animation: spin-rev 5s linear infinite;
+        }
+
+        /* --- CURSOR --- */
+        #hand-cursor {
+            position: absolute;
+            width: 60px; height: 60px;
+            border: 2px solid #00f3ff;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            box-shadow: 0 0 15px #00f3ff;
+            z-index: 500;
+            display: flex;
+            align-items: center; justify-content: center;
+            transition: width 0.1s, background-color 0.2s;
+        }
+        #hand-cursor::before {
+            content: '+'; font-size: 20px; color: #00f3ff;
+        }
+        
+        /* PINCH STATE */
+        .pinched {
+            background-color: rgba(255, 0, 0, 0.3) !important;
+            border-color: red !important;
+            box-shadow: 0 0 25px red !important;
+            width: 30px !important; height: 30px !important;
+        }
+        .pinched::before { content: '' !important; }
+
+        @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+        @keyframes spin-rev { 100% { transform: rotate(-360deg); } }
+
+        #status {
+            position: absolute; bottom: 20px; left: 20px;
+            font-size: 20px;
+        }
+    </style>
+    
+    <!-- MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
-    <h1>my name is Saksham</h1>
+
+    <!-- Error Message -->
+    <div id="error-overlay">
+        <div class="error-content">
+            <h1>CAMERA BLOCKED</h1>
+            <p>The browser blocked access to the webcam.</p>
+            <p><b>SOLUTION:</b> You cannot just double-click this file.</p>
+            <p>You must use "Live Server" in VS Code.</p>
+        </div>
+    </div>
+
+    <!-- Backgrounds -->
+    <div id="grid"></div>
+    <div id="center-ring"></div>
+    <div id="status">SYSTEM STATUS: <span id="sys-msg">INITIALIZING...</span></div>
+
+    <!-- Webcam -->
+    <div class="cam-frame">
+        <div class="cam-label">LIVE FEED</div>
+        <video class="input_video"></video>
+        <canvas class="output_canvas" width="640" height="480"></canvas>
+    </div>
+
+    <!-- Cursor -->
+    <div id="hand-cursor"></div>
+
+    <script>
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementsByClassName('output_canvas')[0];
+        const canvasCtx = canvasElement.getContext('2d');
+        const cursor = document.getElementById('hand-cursor');
+        const sysMsg = document.getElementById('sys-msg');
+        const errorOverlay = document.getElementById('error-overlay');
+
+        // Linear Interpolation for smooth movement
+        function lerp(start, end, amt) {
+            return (1 - amt) * start + amt * end;
+        }
+
+        let curX = 0, curY = 0;
+        let targetX = 0, targetY = 0;
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                sysMsg.innerText = "HAND TRACKING ACTIVE";
+                sysMsg.style.color = "#00f3ff";
+
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Draw skeleton
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00f3ff', lineWidth: 1});
+                drawLandmarks(canvasCtx, landmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
+
+                // INDEX FINGER (8)
+                const indexTip = landmarks[8];
+                const thumbTip = landmarks[4];
+
+                // Calculate screen position (Mirror X)
+                targetX = (1 - indexTip.x) * window.innerWidth;
+                targetY = indexTip.y * window.innerHeight;
+
+                // Smooth movement
+                curX = lerp(curX, targetX, 0.2);
+                curY = lerp(curY, targetY, 0.2);
+
+                cursor.style.left = `${curX}px`;
+                cursor.style.top = `${curY}px`;
+
+                // PINCH DETECTION
+                const distance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+
+                if (distance < 0.05) {
+                    cursor.classList.add('pinched');
+                    sysMsg.innerText = "ACTION: ENGAGED";
+                    sysMsg.style.color = "red";
+                } else {
+                    cursor.classList.remove('pinched');
+                }
+
+            } else {
+                sysMsg.innerText = "SCANNING...";
+                sysMsg.style.color = "white";
+            }
+            canvasCtx.restore();
+        }
+
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        // --- CAMERA START WITH ERROR CHECKING ---
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 640,
+            height: 480
+        });
+
+        // Try to start camera
+        camera.start()
+            .then(() => {
+                console.log("Camera started successfully");
+            })
+            .catch(err => {
+                console.error("Camera failed", err);
+                // SHOW THE ERROR BOX
+                errorOverlay.style.display = "block";
+            });
+
+    </script>
 </body>
 </html>
